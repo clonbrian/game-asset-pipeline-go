@@ -1,0 +1,15 @@
+# build output
+game-asset-pipeline.exe
+game-asset-pipeline
+
+# runtime folders
+output/
+work/
+incoming/
+incoming_ai_done/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

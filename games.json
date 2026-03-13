@@ -1,0 +1,16 @@
+[
+  {
+    "provider": "LOCAL",
+    "game_name": "Party Ape",
+    "english_title": "Party Ape",
+    "output_slug": "party_ape",
+    "aliases": ["party_ape"]
+  },
+    {
+      "provider": "JILI",
+      "game_name": "Super Ace 2",
+      "english_title": "Super Ace 2",
+      "output_slug": "super_ace_2",
+      "aliases": ["SuperAce2", "Super Ace II", "SUPER ACE 2"]
+    }
+  ]

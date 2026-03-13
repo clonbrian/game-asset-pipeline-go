@@ -1,0 +1,9 @@
+[
+    {
+      "provider": "DEMO_HTML",
+      "source_url": "https://example.com",
+      "source_type": "html",
+      "enabled": true,
+      "headers": {}
+    }
+  ]

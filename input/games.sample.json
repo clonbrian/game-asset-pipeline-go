@@ -1,0 +1,16 @@
+[
+    {
+      "provider": "DEMO_HTML",
+      "game_name": "Party Ape",
+      "english_title": "Party Ape",
+      "output_slug": "Party_Ape",
+      "aliases": ["Party Ape", "gameid586"]
+    },
+    {
+      "provider": "DEMO_HTML",
+      "game_name": "Super Ace 2",
+      "english_title": "Super Ace 2",
+      "output_slug": "super_ace_2",
+      "aliases": ["SuperAce2", "Super Ace II", "SUPER ACE 2"]
+    }
+  ]

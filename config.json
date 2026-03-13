@@ -1,0 +1,24 @@
+{
+    "providers_path": "./providers.json",
+    "games_path": "./games.json",
+    "output_dir": "./output",
+    "work_dir": "./work",
+    "user_agent": "GameAssetPipelineBot/1.0",
+    "timeout_seconds": 30,
+    "retry": {
+      "max_attempts": 2,
+      "backoff_millis": 700
+    },
+    "sizes": [
+      { "name": "square", "width": 210, "height": 210 },
+      { "name": "wide",   "width": 325, "height": 234 },
+      { "name": "tall",   "width": 294, "height": 400 }
+    ],
+    "extract": {
+      "max_assets_per_provider": 800,
+      "minimum_match_score": 35
+    },
+    "server": {
+      "addr": "127.0.0.1:8080"
+    }
+  }
