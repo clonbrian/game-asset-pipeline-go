@@ -1,7 +1,7 @@
 [
   {
     "provider": "LOCAL",
-    "source_url": "C:/Users/BrianWuX1C/Desktop/code/game-asset-pipeline-go/incoming",
+    "source_url": "C:/PATH/TO/ASSET/FOLDER",
     "source_type": "local_dir",
     "enabled": true,
     "headers": {}

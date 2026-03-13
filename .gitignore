@@ -8,6 +8,11 @@ work/
 incoming/
 incoming_ai_done/
 
+# local config files
+config.json
+games.json
+providers.json
+
 # OS / editor
 .DS_Store
 Thumbs.db
