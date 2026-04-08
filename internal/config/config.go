@@ -85,14 +85,26 @@ func applyImageGenerationDefaults(ig *model.ImageGenerationSpec) {
 	if ig.Retry <= 0 {
 		ig.Retry = 3
 	}
-	if ig.TimeoutMs <= 0 {
-		ig.TimeoutMs = 120000
+	if ig.TimeoutMs == nil {
+		v := 120000
+		ig.TimeoutMs = &v
 	}
 	if len(ig.SupportedExtensions) == 0 {
 		ig.SupportedExtensions = []string{".png", ".jpg", ".jpeg", ".webp"}
 	}
 	if ig.PromptTemplate == "" {
 		ig.PromptTemplate = "Create a production-ready game asset adaptation from the provided source image. Preserve the core subject, logo, key art style, and visual identity. Expand or recompose the scene naturally for the requested aspect ratio. Keep the subject clean, centered or compositionally balanced, avoid unwanted text changes, avoid distortion, avoid duplicate limbs or objects, and keep it suitable for polished game marketing assets."
+	}
+	if ig.PostprocessEnabled == nil {
+		t := true
+		ig.PostprocessEnabled = &t
+	}
+	if ig.KeepRaw == nil {
+		t := true
+		ig.KeepRaw = &t
+	}
+	if ig.FinalFormat == "" {
+		ig.FinalFormat = "webp"
 	}
 	if len(ig.Sizes) == 0 {
 		ig.Sizes = []model.ImageGenSizeSpec{

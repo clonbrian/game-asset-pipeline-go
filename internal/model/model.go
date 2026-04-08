@@ -63,9 +63,17 @@ type ImageGenerationSpec struct {
 	Overwrite           bool               `json:"overwrite"`
 	Concurrency         int                `json:"concurrency"`
 	Retry               int                `json:"retry"`
-	TimeoutMs           int                `json:"timeoutMs"`
+	// TimeoutMs is nil in JSON → default 120000 in config loader; explicit 0 → no HTTP client timeout.
+	TimeoutMs           *int               `json:"timeoutMs,omitempty"`
 	SupportedExtensions []string           `json:"supportedExtensions"`
 	PromptTemplate      string             `json:"promptTemplate"`
+	// PostprocessEnabled controls whether raw images are resized/encoded into final outputs.
+	// nil means enabled (default true).
+	PostprocessEnabled  *bool              `json:"postprocessEnabled,omitempty"`
+	// KeepRaw: when true (default), write Gemini bytes to rawDir as PNG for resume. When false, skip writing raw (decode in memory only).
+	KeepRaw             *bool              `json:"keepRaw,omitempty"`
+	// FinalFormat: output format for postprocessed files under finalDir; only "webp" is implemented.
+	FinalFormat         string             `json:"finalFormat,omitempty"`
 	Sizes               []ImageGenSizeSpec `json:"sizes"`
 }
 

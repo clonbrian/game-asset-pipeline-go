@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -94,8 +95,27 @@ type apiErrorBody struct {
 	} `json:"error"`
 }
 
+// DetectImageMime returns the Gemini inlineData MIME type from the file path extension.
+// Unsupported extensions return a clear error (never an empty MIME type).
+func DetectImageMime(path string) (string, error) {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".png":
+		return "image/png", nil
+	case ".jpg", ".jpeg":
+		return "image/jpeg", nil
+	case ".webp":
+		return "image/webp", nil
+	case "":
+		return "", fmt.Errorf("unsupported image file (no extension): %q — use .png, .jpg, .jpeg, or .webp", path)
+	default:
+		return "", fmt.Errorf("unsupported image extension %q in %q — Gemini inlineData allows only .png, .jpg, .jpeg, .webp", ext, path)
+	}
+}
+
 // GenerateImageAdaptation sends the source image and prompt; returns decoded image bytes and output MIME type.
-func (c *Client) GenerateImageAdaptation(ctx context.Context, prompt string, imageBytes []byte, inputMime, aspectRatio, imageSize string) ([]byte, string, error) {
+// sourcePath is used to detect MIME type by extension (required for correct inlineData).
+func (c *Client) GenerateImageAdaptation(ctx context.Context, prompt string, imageBytes []byte, sourcePath, aspectRatio, imageSize string) ([]byte, string, error) {
 	if c.APIKey == "" {
 		return nil, "", fmt.Errorf("gemini: missing API key (set environment variable from config apiKeyEnv)")
 	}
@@ -115,17 +135,19 @@ func (c *Client) GenerateImageAdaptation(ctx context.Context, prompt string, ima
 	q.Set("key", c.APIKey)
 	u.RawQuery = q.Encode()
 
-	b64 := base64.StdEncoding.EncodeToString(imageBytes)
-	mime := inputMime
-	if mime == "" {
-		mime = "image/png"
+	mime, err := DetectImageMime(sourcePath)
+	if err != nil {
+		return nil, "", fmt.Errorf("gemini: %w", err)
 	}
+
+	b64 := base64.StdEncoding.EncodeToString(imageBytes)
 
 	reqBody := genContentRequest{
 		Contents: []contentMsg{{
 			Parts: []partMsg{
 				{Text: prompt},
-				{InlineData: &inlineData{MimeType: mime, Data: b64}},
+				// REST 範例使用 mime_type；部分轉譯層讀 camelCase。兩者都設成相同值，避免其中一個為空字串導致 INVALID_ARGUMENT。
+				{InlineData: &inlineData{MimeType: mime, MimeTypeLegacy: mime, Data: b64}},
 			},
 		}},
 		GenerationConfig: genConfig{
@@ -213,13 +235,13 @@ func truncate(s string, n int) string {
 }
 
 // GenerateWithRetry wraps GenerateImageAdaptation with retries on transient errors and rate limits.
-func GenerateWithRetry(ctx context.Context, client *Client, prompt string, imageBytes []byte, inputMime, aspectRatio, imageSize string, maxAttempts int, baseBackoff time.Duration) ([]byte, string, error) {
+func GenerateWithRetry(ctx context.Context, client *Client, prompt string, imageBytes []byte, sourcePath, aspectRatio, imageSize string, maxAttempts int, baseBackoff time.Duration) ([]byte, string, error) {
 	if maxAttempts <= 0 {
 		maxAttempts = 1
 	}
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		out, mt, err := client.GenerateImageAdaptation(ctx, prompt, imageBytes, inputMime, aspectRatio, imageSize)
+		out, mt, err := client.GenerateImageAdaptation(ctx, prompt, imageBytes, sourcePath, aspectRatio, imageSize)
 		if err == nil {
 			return out, mt, nil
 		}

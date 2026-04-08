@@ -41,7 +41,7 @@ type geminiBatchReport struct {
 	Entries      []geminiReportEntry `json:"entries"`
 }
 
-// BatchGemini: (1) Gemini produces aspect-ratio raw PNGs __{name}__raw.png; (2) local cover+center-crop to targetWidth×targetHeight → __{name}.png.
+// BatchGemini: (1) Gemini writes raw PNGs to outputDir/raw; (2) local postprocess writes finals to outputDir/final; reports stay in outputDir.
 func (a *App) BatchGemini() error {
 	cfg := a.Cfg
 	ig := cfg.ImageGeneration
@@ -63,6 +63,11 @@ func (a *App) BatchGemini() error {
 			return fmt.Errorf("imageGeneration.sizes name=%q: aspectRatio is required for Gemini raw generation", sz.Name)
 		}
 	}
+	ff := strings.ToLower(strings.TrimSpace(ig.FinalFormat))
+	if ff != "webp" {
+		return fmt.Errorf("imageGeneration.finalFormat %q is not supported (only \"webp\")", ig.FinalFormat)
+	}
+	postprocessEnabled := ig.PostprocessEnabled == nil || *ig.PostprocessEnabled
 
 	apiKey := strings.TrimSpace(os.Getenv(ig.APIKeyEnv))
 	if apiKey == "" {
@@ -98,8 +103,21 @@ func (a *App) BatchGemini() error {
 		return nil
 	}
 
-	if err := os.MkdirAll(ig.OutputDir, 0o755); err != nil {
-		return fmt.Errorf("create outputDir: %w", err)
+	rawDir := filepath.Join(ig.OutputDir, "raw")
+	finalDir := filepath.Join(ig.OutputDir, "final")
+	for _, d := range []string{ig.OutputDir, rawDir, finalDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			return fmt.Errorf("create output dir %s: %w", d, err)
+		}
+	}
+
+	timeoutMs := *ig.TimeoutMs
+	var httpClient *http.Client
+	if timeoutMs > 0 {
+		httpClient = &http.Client{Timeout: time.Duration(timeoutMs) * time.Millisecond}
+	} else {
+		fmt.Printf("[WARN] batch-gemini running with no HTTP timeout\n")
+		httpClient = &http.Client{}
 	}
 
 	type job struct {
@@ -117,11 +135,20 @@ func (a *App) BatchGemini() error {
 		}
 	}
 
-	fmt.Printf("[INFO] Gemini batch (raw + local postprocess): %d sources × %d sizes = %d jobs (concurrency=%d)\n",
-		len(imageFiles), len(ig.Sizes), len(jobs), ig.Concurrency)
-	fmt.Printf("[INFO] Model=%s output=%s\n", ig.Model, ig.OutputDir)
+	persistRaw := ig.KeepRaw != nil && *ig.KeepRaw
+	if !postprocessEnabled && !persistRaw {
+		fmt.Printf("[WARN] keepRaw=false is ignored when postprocessEnabled=false; raw-only mode always preserves raw outputs\n")
+		persistRaw = true
+	}
+	mode := "raw+postprocess"
+	if !postprocessEnabled {
+		mode = "raw-only"
+	}
+	fmt.Printf("[INFO] batch-gemini mode = %s\n", mode)
+	fmt.Printf("[INFO] Gemini batch (raw PNG + local postprocess=%v → final %s): %d sources × %d sizes = %d jobs (concurrency=%d keepRaw=%v)\n",
+		postprocessEnabled, ff, len(imageFiles), len(ig.Sizes), len(jobs), ig.Concurrency, persistRaw)
+	fmt.Printf("[INFO] Model=%s output=%s (raw=%s final=%s)\n", ig.Model, ig.OutputDir, rawDir, finalDir)
 
-	httpClient := &http.Client{Timeout: time.Duration(ig.TimeoutMs) * time.Millisecond}
 	gc := &gemini.Client{
 		HTTP:   httpClient,
 		APIKey: apiKey,
@@ -149,9 +176,9 @@ func (a *App) BatchGemini() error {
 			defer func() { <-sem }()
 
 			rawName := fmt.Sprintf("%s__%s__raw.png", j.baseName, j.sz.Name)
-			finalName := fmt.Sprintf("%s__%s.png", j.baseName, j.sz.Name)
-			rawPath := filepath.Join(ig.OutputDir, rawName)
-			finalPath := filepath.Join(ig.OutputDir, finalName)
+			finalName := fmt.Sprintf("%s__%s.%s", j.baseName, j.sz.Name, ff)
+			rawPath := filepath.Join(rawDir, rawName)
+			finalPath := filepath.Join(finalDir, finalName)
 			tw, th := j.sz.TargetWidth, j.sz.TargetHeight
 
 			entry := geminiReportEntry{
@@ -160,17 +187,33 @@ func (a *App) BatchGemini() error {
 				FinalOutputFile: finalPath,
 				SizeName:        j.sz.Name,
 			}
+			if !postprocessEnabled {
+				entry.FinalOutputFile = ""
+			}
 
 			if !ig.Overwrite {
-				if _, err := os.Stat(finalPath); err == nil {
-					entry.Status = "skipped"
-					skippedN.Add(1)
-					reportMu.Lock()
-					entries = append(entries, entry)
-					reportMu.Unlock()
-					n := completedN.Add(1)
-					fmt.Printf("[%d/%d] SKIP %s (%s) final exists -> %s\n", n, totalJobs, j.inputPath, j.sz.Name, finalPath)
-					return
+				if postprocessEnabled {
+					if _, err := os.Stat(finalPath); err == nil {
+						entry.Status = "skipped"
+						skippedN.Add(1)
+						reportMu.Lock()
+						entries = append(entries, entry)
+						reportMu.Unlock()
+						n := completedN.Add(1)
+						fmt.Printf("[%d/%d] SKIP %s (%s) final exists -> %s\n", n, totalJobs, j.inputPath, j.sz.Name, finalPath)
+						return
+					}
+				} else {
+					if _, err := os.Stat(rawPath); err == nil {
+						entry.Status = "skipped"
+						skippedN.Add(1)
+						reportMu.Lock()
+						entries = append(entries, entry)
+						reportMu.Unlock()
+						n := completedN.Add(1)
+						fmt.Printf("[%d/%d] SKIP %s (%s) raw exists -> %s\n", n, totalJobs, j.inputPath, j.sz.Name, rawPath)
+						return
+					}
 				}
 			}
 
@@ -181,6 +224,7 @@ func (a *App) BatchGemini() error {
 				}
 			}
 
+			var srcImg image.Image
 			if needGemini {
 				imgBytes, err := os.ReadFile(j.inputPath)
 				if err != nil {
@@ -195,12 +239,10 @@ func (a *App) BatchGemini() error {
 					return
 				}
 
-				sizePrompt := sizeSpecificPrompt(j.sz)
-				fullPrompt := strings.TrimSpace(ig.PromptTemplate) + "\n\n" + sizePrompt
+				fullPrompt := composeGeminiUserPrompt(ig, j.sz)
 				ctx := context.Background()
-				inMime := mimeForExt(filepath.Ext(j.inputPath))
 				backoff := 700 * time.Millisecond
-				genBytes, genMime, err := gemini.GenerateWithRetry(ctx, gc, fullPrompt, imgBytes, inMime, j.sz.AspectRatio, ig.ImageSize, ig.Retry, backoff)
+				genBytes, genMime, err := gemini.GenerateWithRetry(ctx, gc, fullPrompt, imgBytes, j.inputPath, j.sz.AspectRatio, ig.ImageSize, ig.Retry, backoff)
 				if err != nil {
 					entry.Status = "failed"
 					entry.Error = err.Error()
@@ -213,32 +255,64 @@ func (a *App) BatchGemini() error {
 					return
 				}
 
-				if err := writeGeminiOutputPNG(rawPath, genBytes, genMime); err != nil {
+				if persistRaw {
+					if err := writeGeminiOutputPNG(rawPath, genBytes, genMime); err != nil {
+						entry.Status = "failed"
+						entry.Error = fmt.Sprintf("write raw png: %v", err)
+						failedN.Add(1)
+						reportMu.Lock()
+						entries = append(entries, entry)
+						reportMu.Unlock()
+						n := completedN.Add(1)
+						fmt.Printf("[%d/%d] FAIL %s (%s) raw write: %v\n", n, totalJobs, j.inputPath, j.sz.Name, err)
+						return
+					}
+					fmt.Printf("[RAW] %s (%s) -> %s\n", j.inputPath, j.sz.Name, rawPath)
+					srcImg, err = decodeImageFile(rawPath)
+				} else {
+					fmt.Printf("[RAW] %s (%s) -> (memory only, keepRaw=false)\n", j.inputPath, j.sz.Name)
+					srcImg, _, err = image.Decode(bytes.NewReader(genBytes))
+				}
+				if err != nil {
 					entry.Status = "failed"
-					entry.Error = fmt.Sprintf("write raw png: %v", err)
+					entry.Error = fmt.Sprintf("decode gemini output: %v", err)
 					failedN.Add(1)
 					reportMu.Lock()
 					entries = append(entries, entry)
 					reportMu.Unlock()
 					n := completedN.Add(1)
-					fmt.Printf("[%d/%d] FAIL %s (%s) raw write: %v\n", n, totalJobs, j.inputPath, j.sz.Name, err)
+					fmt.Printf("[%d/%d] FAIL %s (%s) decode gemini output: %v\n", n, totalJobs, j.inputPath, j.sz.Name, err)
 					return
 				}
-				fmt.Printf("[RAW] %s (%s) -> %s\n", j.inputPath, j.sz.Name, rawPath)
 			} else {
 				fmt.Printf("[REUSE] %s (%s) -> %s\n", j.inputPath, j.sz.Name, rawPath)
+				var err error
+				srcImg, err = decodeImageFile(rawPath)
+				if err != nil {
+					entry.Status = "failed"
+					entry.Error = fmt.Sprintf("decode raw: %v", err)
+					failedN.Add(1)
+					reportMu.Lock()
+					entries = append(entries, entry)
+					reportMu.Unlock()
+					n := completedN.Add(1)
+					fmt.Printf("[%d/%d] FAIL %s (%s) decode raw: %v\n", n, totalJobs, j.inputPath, j.sz.Name, err)
+					return
+				}
 			}
 
-			srcImg, err := decodeImageFile(rawPath)
-			if err != nil {
-				entry.Status = "failed"
-				entry.Error = fmt.Sprintf("decode raw: %v", err)
-				failedN.Add(1)
+			if needGemini && !persistRaw {
+				entry.RawOutputFile = ""
+			}
+
+			if !postprocessEnabled {
+				entry.Status = "success"
+				successN.Add(1)
 				reportMu.Lock()
 				entries = append(entries, entry)
 				reportMu.Unlock()
 				n := completedN.Add(1)
-				fmt.Printf("[%d/%d] FAIL %s (%s) decode raw: %v\n", n, totalJobs, j.inputPath, j.sz.Name, err)
+				fmt.Printf("[%d/%d] OK   %s (%s) raw-only -> %s\n", n, totalJobs, j.inputPath, j.sz.Name, rawPath)
 				return
 			}
 
@@ -255,9 +329,9 @@ func (a *App) BatchGemini() error {
 				return
 			}
 
-			if err := postprocess.WritePNG(finalPath, outImg); err != nil {
+			if err := postprocess.WriteFinal(finalPath, outImg, ig.FinalFormat, postprocess.DefaultWebPQuality); err != nil {
 				entry.Status = "failed"
-				entry.Error = fmt.Sprintf("write final png: %v", err)
+				entry.Error = fmt.Sprintf("write final: %v", err)
 				failedN.Add(1)
 				reportMu.Lock()
 				entries = append(entries, entry)
@@ -295,9 +369,15 @@ func (a *App) BatchGemini() error {
 		return fmt.Errorf("write report csv: %w", err)
 	}
 
-	fmt.Printf("\n[DONE] Gemini batch finished (raw + fixed-size finals).\n")
+	if postprocessEnabled {
+		fmt.Printf("\n[DONE] Gemini batch finished (raw + fixed-size finals).\n")
+	} else {
+		fmt.Printf("\n[DONE] Gemini batch finished (raw-only mode).\n")
+	}
 	fmt.Printf("  success=%d failed=%d skipped=%d\n", report.SuccessCount, report.FailedCount, report.SkippedCount)
-	fmt.Printf("  outputs=%s\n", ig.OutputDir)
+	fmt.Printf("  outputDir=%s\n", ig.OutputDir)
+	fmt.Printf("  rawDir=%s\n", rawDir)
+	fmt.Printf("  finalDir=%s\n", finalDir)
 	fmt.Printf("  report_json=%s\n", reportJSON)
 	fmt.Printf("  report_csv=%s\n", reportCSV)
 	if report.FailedCount > 0 {
@@ -318,35 +398,6 @@ func decodeImageFile(path string) (image.Image, error) {
 	}
 	img, _, err := image.Decode(bytes.NewReader(b))
 	return img, err
-}
-
-func sizeSpecificPrompt(sz model.ImageGenSizeSpec) string {
-	if s := strings.TrimSpace(sz.SizePrompt); s != "" {
-		return s
-	}
-	switch sz.Name {
-	case "square":
-		return "Adapt the image to a balanced 1:1 composition suitable for icon-like or lobby usage."
-	case "wide":
-		return "Adapt the image to a cinematic 16:9 composition suitable for banner or desktop promotional usage."
-	case "tall":
-		return "Adapt the image to a mobile-first 9:16 composition suitable for portrait promotional usage."
-	default:
-		return fmt.Sprintf("Adapt the composition for aspect ratio %s for polished game marketing use.", sz.AspectRatio)
-	}
-}
-
-func mimeForExt(ext string) string {
-	switch strings.ToLower(ext) {
-	case ".jpg", ".jpeg":
-		return "image/jpeg"
-	case ".png":
-		return "image/png"
-	case ".webp":
-		return "image/webp"
-	default:
-		return "image/png"
-	}
 }
 
 func writeGeminiOutputPNG(path string, data []byte, mime string) error {
