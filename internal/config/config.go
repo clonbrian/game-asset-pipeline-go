@@ -67,6 +67,22 @@ func applyImageGenerationDefaults(ig *model.ImageGenerationSpec) {
 	if ig.Provider == "" {
 		ig.Provider = "gemini"
 	}
+	if ig.ModelPreset == "" {
+		ig.ModelPreset = "gemini_default"
+	}
+	if len(ig.Presets) == 0 {
+		ig.Presets = map[string]model.ImageModelPreset{
+			"gemini_default": {
+				ProviderRoute: "gemini",
+				Model:         "gemini-3.1-flash-image-preview",
+				ImageSize:     "512",
+			},
+			"imagen_fast_test": {
+				ProviderRoute: "imagen",
+				Model:         "imagen-4.0-fast-generate-001",
+			},
+		}
+	}
 	if ig.APIKeyEnv == "" {
 		ig.APIKeyEnv = "GEMINI_API_KEY"
 	}

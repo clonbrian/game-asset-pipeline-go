@@ -20,6 +20,7 @@ import (
 	_ "golang.org/x/image/webp"
 
 	"game-asset-pipeline-go/internal/imagegen/gemini"
+	"game-asset-pipeline-go/internal/imagegen/imagen"
 	"game-asset-pipeline-go/internal/imagegen/postprocess"
 	"game-asset-pipeline-go/internal/model"
 )
@@ -28,6 +29,8 @@ type geminiReportEntry struct {
 	InputFile       string `json:"inputFile"`
 	RawOutputFile   string `json:"rawOutputFile"`
 	FinalOutputFile string `json:"finalOutputFile"`
+	ProviderRouteUsed string `json:"providerRouteUsed"`
+	SourceImageUsed bool `json:"sourceImageUsed"`
 	SizeName        string `json:"sizeName"`
 	Status          string `json:"status"`
 	Error           string `json:"error,omitempty"`
@@ -53,6 +56,22 @@ func (a *App) BatchGemini() error {
 	}
 	if strings.ToLower(strings.TrimSpace(ig.Provider)) != "gemini" {
 		return fmt.Errorf("unsupported imageGeneration.provider %q (only \"gemini\" is implemented)", ig.Provider)
+	}
+	preset, ok := ig.Presets[ig.ModelPreset]
+	if !ok {
+		return fmt.Errorf("imageGeneration.modelPreset %q is invalid; supported: gemini_default, imagen_fast_test", ig.ModelPreset)
+	}
+	providerRoute := strings.ToLower(strings.TrimSpace(preset.ProviderRoute))
+	if providerRoute != "gemini" && providerRoute != "imagen" {
+		return fmt.Errorf("imageGeneration.presets[%q].providerRoute %q is invalid; use gemini or imagen", ig.ModelPreset, preset.ProviderRoute)
+	}
+	resolvedModel := strings.TrimSpace(preset.Model)
+	if resolvedModel == "" {
+		return fmt.Errorf("imageGeneration.presets[%q].model is empty", ig.ModelPreset)
+	}
+	resolvedImageSize := strings.TrimSpace(preset.ImageSize)
+	if resolvedImageSize == "" {
+		resolvedImageSize = ig.ImageSize
 	}
 
 	for _, sz := range ig.Sizes {
@@ -147,12 +166,20 @@ func (a *App) BatchGemini() error {
 	fmt.Printf("[INFO] batch-gemini mode = %s\n", mode)
 	fmt.Printf("[INFO] Gemini batch (raw PNG + local postprocess=%v → final %s): %d sources × %d sizes = %d jobs (concurrency=%d keepRaw=%v)\n",
 		postprocessEnabled, ff, len(imageFiles), len(ig.Sizes), len(jobs), ig.Concurrency, persistRaw)
-	fmt.Printf("[INFO] Model=%s output=%s (raw=%s final=%s)\n", ig.Model, ig.OutputDir, rawDir, finalDir)
+	fmt.Printf("[INFO] preset=%s route=%s model=%s output=%s (raw=%s final=%s)\n", ig.ModelPreset, providerRoute, resolvedModel, ig.OutputDir, rawDir, finalDir)
+	if providerRoute == "imagen" {
+		fmt.Printf("[WARN] imagen_fast_test currently runs as text-to-image and does not use the source image as reference input\n")
+	}
 
 	gc := &gemini.Client{
 		HTTP:   httpClient,
 		APIKey: apiKey,
-		Model:  strings.TrimSpace(ig.Model),
+		Model:  resolvedModel,
+	}
+	ic := &imagen.Client{
+		HTTP:   httpClient,
+		APIKey: apiKey,
+		Model:  resolvedModel,
 	}
 
 	var (
@@ -185,6 +212,8 @@ func (a *App) BatchGemini() error {
 				InputFile:       j.inputPath,
 				RawOutputFile:   rawPath,
 				FinalOutputFile: finalPath,
+				ProviderRouteUsed: providerRoute,
+				SourceImageUsed: providerRoute == "gemini",
 				SizeName:        j.sz.Name,
 			}
 			if !postprocessEnabled {
@@ -242,7 +271,16 @@ func (a *App) BatchGemini() error {
 				fullPrompt := composeGeminiUserPrompt(ig, j.sz)
 				ctx := context.Background()
 				backoff := 700 * time.Millisecond
-				genBytes, genMime, err := gemini.GenerateWithRetry(ctx, gc, fullPrompt, imgBytes, j.inputPath, j.sz.AspectRatio, ig.ImageSize, ig.Retry, backoff)
+				var genBytes []byte
+				var genMime string
+				switch providerRoute {
+				case "gemini":
+					genBytes, genMime, err = gemini.GenerateWithRetry(ctx, gc, fullPrompt, imgBytes, j.inputPath, j.sz.AspectRatio, resolvedImageSize, ig.Retry, backoff)
+				case "imagen":
+					genBytes, genMime, err = imagen.GenerateWithRetry(ctx, ic, fullPrompt, j.inputPath, j.sz.AspectRatio, ig.Retry, backoff)
+				default:
+					err = fmt.Errorf("unsupported provider route: %s", providerRoute)
+				}
 				if err != nil {
 					entry.Status = "failed"
 					entry.Error = err.Error()
@@ -428,9 +466,13 @@ func writeGeminiReportCSV(path string, rows []geminiReportEntry) error {
 	defer f.Close()
 	w := csv.NewWriter(f)
 	defer w.Flush()
-	_ = w.Write([]string{"input_file", "raw_output_file", "final_output_file", "size_name", "status", "error"})
+	_ = w.Write([]string{"input_file", "raw_output_file", "final_output_file", "provider_route_used", "source_image_used", "size_name", "status", "error"})
 	for _, r := range rows {
-		_ = w.Write([]string{r.InputFile, r.RawOutputFile, r.FinalOutputFile, r.SizeName, r.Status, r.Error})
+		sourceUsed := "false"
+		if r.SourceImageUsed {
+			sourceUsed = "true"
+		}
+		_ = w.Write([]string{r.InputFile, r.RawOutputFile, r.FinalOutputFile, r.ProviderRouteUsed, sourceUsed, r.SizeName, r.Status, r.Error})
 	}
 	return w.Error()
 }

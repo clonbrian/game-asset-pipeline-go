@@ -53,6 +53,8 @@ type Config struct {
 
 // ImageGenerationSpec configures Gemini (or future providers) batch image adaptation.
 type ImageGenerationSpec struct {
+	ModelPreset         string                        `json:"modelPreset,omitempty"`
+	Presets             map[string]ImageModelPreset   `json:"presets,omitempty"`
 	Provider            string             `json:"provider"`
 	Enabled             bool               `json:"enabled"`
 	APIKeyEnv           string             `json:"apiKeyEnv"`
@@ -75,6 +77,12 @@ type ImageGenerationSpec struct {
 	// FinalFormat: output format for postprocessed files under finalDir; only "webp" is implemented.
 	FinalFormat         string             `json:"finalFormat,omitempty"`
 	Sizes               []ImageGenSizeSpec `json:"sizes"`
+}
+
+type ImageModelPreset struct {
+	ProviderRoute string `json:"providerRoute"`
+	Model         string `json:"model"`
+	ImageSize     string `json:"imageSize,omitempty"`
 }
 
 // ImageGenSizeSpec is one Gemini raw aspect ratio plus final pixel size (independent of top-level sizes[] for WebP pipeline).
