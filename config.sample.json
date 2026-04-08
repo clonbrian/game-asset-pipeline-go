@@ -26,5 +26,26 @@
   
     "server": {
       "addr": "127.0.0.1:8080"
+    },
+
+    "imageGeneration": {
+      "provider": "gemini",
+      "enabled": false,
+      "apiKeyEnv": "GEMINI_API_KEY",
+      "model": "gemini-3.1-flash-image-preview",
+      "imageSize": "1K",
+      "inputDir": "./input/gemini_batch_sample",
+      "outputDir": "./output/gemini_batch",
+      "overwrite": false,
+      "concurrency": 2,
+      "retry": 3,
+      "timeoutMs": 120000,
+      "supportedExtensions": [".png", ".jpg", ".jpeg", ".webp"],
+      "promptTemplate": "Create a production-ready game asset adaptation from the provided source image. Preserve the core subject, logo, key art style, and visual identity. Expand or recompose the scene naturally for the requested aspect ratio. Keep the subject clean, centered or compositionally balanced, avoid unwanted text changes, avoid distortion, avoid duplicate limbs or objects, and keep it suitable for polished game marketing assets.",
+      "sizes": [
+        { "name": "square", "aspectRatio": "1:1" },
+        { "name": "wide", "aspectRatio": "16:9" },
+        { "name": "tall", "aspectRatio": "9:16" }
+      ]
     }
   }

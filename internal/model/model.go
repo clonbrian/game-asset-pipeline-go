@@ -37,17 +37,43 @@ type ServerSpec struct {
 }
 
 type Config struct {
-	ProvidersPath  string     `json:"providers_path"`
-	GamesPath      string     `json:"games_path"`
-	OutputDir      string     `json:"output_dir"`
-	WorkDir        string     `json:"work_dir"`
-	IncomingDir    string     `json:"incoming_dir"`
-	UserAgent      string     `json:"user_agent"`
-	TimeoutSeconds int        `json:"timeout_seconds"`
-	Retry          RetrySpec  `json:"retry"`
-	Sizes          []SizeSpec `json:"sizes"`
-	Extract        ExtractSpec`json:"extract"`
-	Server         ServerSpec `json:"server"`
+	ProvidersPath    string               `json:"providers_path"`
+	GamesPath        string               `json:"games_path"`
+	OutputDir        string               `json:"output_dir"`
+	WorkDir          string               `json:"work_dir"`
+	IncomingDir      string               `json:"incoming_dir"`
+	UserAgent        string               `json:"user_agent"`
+	TimeoutSeconds   int                  `json:"timeout_seconds"`
+	Retry            RetrySpec            `json:"retry"`
+	Sizes            []SizeSpec           `json:"sizes"`
+	Extract          ExtractSpec          `json:"extract"`
+	Server           ServerSpec           `json:"server"`
+	ImageGeneration  *ImageGenerationSpec `json:"imageGeneration,omitempty"`
+}
+
+// ImageGenerationSpec configures Gemini (or future providers) batch image adaptation.
+type ImageGenerationSpec struct {
+	Provider            string             `json:"provider"`
+	Enabled             bool               `json:"enabled"`
+	APIKeyEnv           string             `json:"apiKeyEnv"`
+	Model               string             `json:"model"`
+	ImageSize           string             `json:"imageSize"`
+	InputDir            string             `json:"inputDir"`
+	OutputDir           string             `json:"outputDir"`
+	Overwrite           bool               `json:"overwrite"`
+	Concurrency         int                `json:"concurrency"`
+	Retry               int                `json:"retry"`
+	TimeoutMs           int                `json:"timeoutMs"`
+	SupportedExtensions []string           `json:"supportedExtensions"`
+	PromptTemplate      string             `json:"promptTemplate"`
+	Sizes               []ImageGenSizeSpec `json:"sizes"`
+}
+
+// ImageGenSizeSpec is one output aspect ratio for image generation (independent of resize SizeSpec).
+type ImageGenSizeSpec struct {
+	Name         string `json:"name"`
+	AspectRatio  string `json:"aspectRatio"`
+	SizePrompt   string `json:"sizePrompt,omitempty"`
 }
 
 type AssetCandidate struct {

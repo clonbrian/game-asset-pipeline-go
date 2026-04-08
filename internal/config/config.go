@@ -56,5 +56,49 @@ func LoadConfig(path string) (*model.Config, error) {
 			{Name: "lg", Width: 1280, Height: 720},
 		}
 	}
+	applyImageGenerationDefaults(cfg.ImageGeneration)
 	return &cfg, nil
+}
+
+func applyImageGenerationDefaults(ig *model.ImageGenerationSpec) {
+	if ig == nil {
+		return
+	}
+	if ig.Provider == "" {
+		ig.Provider = "gemini"
+	}
+	if ig.APIKeyEnv == "" {
+		ig.APIKeyEnv = "GEMINI_API_KEY"
+	}
+	if ig.ImageSize == "" {
+		ig.ImageSize = "1K"
+	}
+	if ig.InputDir == "" {
+		ig.InputDir = "./input"
+	}
+	if ig.OutputDir == "" {
+		ig.OutputDir = "./output"
+	}
+	if ig.Concurrency <= 0 {
+		ig.Concurrency = 2
+	}
+	if ig.Retry <= 0 {
+		ig.Retry = 3
+	}
+	if ig.TimeoutMs <= 0 {
+		ig.TimeoutMs = 120000
+	}
+	if len(ig.SupportedExtensions) == 0 {
+		ig.SupportedExtensions = []string{".png", ".jpg", ".jpeg", ".webp"}
+	}
+	if ig.PromptTemplate == "" {
+		ig.PromptTemplate = "Create a production-ready game asset adaptation from the provided source image. Preserve the core subject, logo, key art style, and visual identity. Expand or recompose the scene naturally for the requested aspect ratio. Keep the subject clean, centered or compositionally balanced, avoid unwanted text changes, avoid distortion, avoid duplicate limbs or objects, and keep it suitable for polished game marketing assets."
+	}
+	if len(ig.Sizes) == 0 {
+		ig.Sizes = []model.ImageGenSizeSpec{
+			{Name: "square", AspectRatio: "1:1"},
+			{Name: "wide", AspectRatio: "16:9"},
+			{Name: "tall", AspectRatio: "9:16"},
+		}
+	}
 }
