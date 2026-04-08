@@ -36,9 +36,9 @@
       "supportedExtensions": [".png", ".jpg", ".jpeg", ".webp"],
       "promptTemplate": "Create a production-ready game asset adaptation from the provided source image. Preserve the core subject, logo, key art style, and visual identity. Expand or recompose the scene naturally for the requested aspect ratio. Keep the subject clean, centered or compositionally balanced, avoid unwanted text changes, avoid distortion, avoid duplicate limbs or objects, and keep it suitable for polished game marketing assets.",
       "sizes": [
-        { "name": "square", "aspectRatio": "1:1" },
-        { "name": "wide", "aspectRatio": "16:9" },
-        { "name": "tall", "aspectRatio": "9:16" }
+        { "name": "square", "aspectRatio": "1:1", "targetWidth": 210, "targetHeight": 210 },
+        { "name": "wide", "aspectRatio": "16:9", "targetWidth": 325, "targetHeight": 234 },
+        { "name": "tall", "aspectRatio": "9:16", "targetWidth": 294, "targetHeight": 400 }
       ]
     }
   }

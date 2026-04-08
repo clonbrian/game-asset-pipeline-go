@@ -20,15 +20,17 @@ import (
 	_ "golang.org/x/image/webp"
 
 	"game-asset-pipeline-go/internal/imagegen/gemini"
+	"game-asset-pipeline-go/internal/imagegen/postprocess"
 	"game-asset-pipeline-go/internal/model"
 )
 
 type geminiReportEntry struct {
-	InputFile  string `json:"inputFile"`
-	OutputFile string `json:"outputFile"`
-	SizeName   string `json:"sizeName"`
-	Status     string `json:"status"`
-	Error      string `json:"error,omitempty"`
+	InputFile       string `json:"inputFile"`
+	RawOutputFile   string `json:"rawOutputFile"`
+	FinalOutputFile string `json:"finalOutputFile"`
+	SizeName        string `json:"sizeName"`
+	Status          string `json:"status"`
+	Error           string `json:"error,omitempty"`
 }
 
 type geminiBatchReport struct {
@@ -39,7 +41,7 @@ type geminiBatchReport struct {
 	Entries      []geminiReportEntry `json:"entries"`
 }
 
-// BatchGemini scans imageGeneration.inputDir, calls Gemini image API per file and aspect ratio, writes PNGs and a report.
+// BatchGemini: (1) Gemini produces aspect-ratio raw PNGs __{name}__raw.png; (2) local cover+center-crop to targetWidth×targetHeight → __{name}.png.
 func (a *App) BatchGemini() error {
 	cfg := a.Cfg
 	ig := cfg.ImageGeneration
@@ -51,6 +53,15 @@ func (a *App) BatchGemini() error {
 	}
 	if strings.ToLower(strings.TrimSpace(ig.Provider)) != "gemini" {
 		return fmt.Errorf("unsupported imageGeneration.provider %q (only \"gemini\" is implemented)", ig.Provider)
+	}
+
+	for _, sz := range ig.Sizes {
+		if sz.TargetWidth <= 0 || sz.TargetHeight <= 0 {
+			return fmt.Errorf("imageGeneration.sizes name=%q: targetWidth and targetHeight must be > 0 (got %dx%d)", sz.Name, sz.TargetWidth, sz.TargetHeight)
+		}
+		if strings.TrimSpace(sz.AspectRatio) == "" {
+			return fmt.Errorf("imageGeneration.sizes name=%q: aspectRatio is required for Gemini raw generation", sz.Name)
+		}
 	}
 
 	apiKey := strings.TrimSpace(os.Getenv(ig.APIKeyEnv))
@@ -106,7 +117,7 @@ func (a *App) BatchGemini() error {
 		}
 	}
 
-	fmt.Printf("[INFO] Gemini batch: %d source images × %d sizes = %d jobs (concurrency=%d)\n",
+	fmt.Printf("[INFO] Gemini batch (raw + local postprocess): %d sources × %d sizes = %d jobs (concurrency=%d)\n",
 		len(imageFiles), len(ig.Sizes), len(jobs), ig.Concurrency)
 	fmt.Printf("[INFO] Model=%s output=%s\n", ig.Model, ig.OutputDir)
 
@@ -137,69 +148,122 @@ func (a *App) BatchGemini() error {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			outName := fmt.Sprintf("%s__%s.png", j.baseName, j.sz.Name)
-			outPath := filepath.Join(ig.OutputDir, outName)
-			sizePrompt := sizeSpecificPrompt(j.sz)
-			fullPrompt := strings.TrimSpace(ig.PromptTemplate) + "\n\n" + sizePrompt
+			rawName := fmt.Sprintf("%s__%s__raw.png", j.baseName, j.sz.Name)
+			finalName := fmt.Sprintf("%s__%s.png", j.baseName, j.sz.Name)
+			rawPath := filepath.Join(ig.OutputDir, rawName)
+			finalPath := filepath.Join(ig.OutputDir, finalName)
+			tw, th := j.sz.TargetWidth, j.sz.TargetHeight
 
 			entry := geminiReportEntry{
-				InputFile:  j.inputPath,
-				OutputFile: outPath,
-				SizeName:   j.sz.Name,
+				InputFile:       j.inputPath,
+				RawOutputFile:   rawPath,
+				FinalOutputFile: finalPath,
+				SizeName:        j.sz.Name,
 			}
 
 			if !ig.Overwrite {
-				if _, err := os.Stat(outPath); err == nil {
+				if _, err := os.Stat(finalPath); err == nil {
 					entry.Status = "skipped"
 					skippedN.Add(1)
 					reportMu.Lock()
 					entries = append(entries, entry)
 					reportMu.Unlock()
 					n := completedN.Add(1)
-					fmt.Printf("[%d/%d] SKIP %s (%s) -> exists %s\n", n, totalJobs, j.inputPath, j.sz.Name, outPath)
+					fmt.Printf("[%d/%d] SKIP %s (%s) final exists -> %s\n", n, totalJobs, j.inputPath, j.sz.Name, finalPath)
 					return
 				}
 			}
 
-			imgBytes, err := os.ReadFile(j.inputPath)
+			needGemini := ig.Overwrite
+			if !needGemini {
+				if _, err := os.Stat(rawPath); err != nil {
+					needGemini = true
+				}
+			}
+
+			if needGemini {
+				imgBytes, err := os.ReadFile(j.inputPath)
+				if err != nil {
+					entry.Status = "failed"
+					entry.Error = fmt.Sprintf("read input: %v", err)
+					failedN.Add(1)
+					reportMu.Lock()
+					entries = append(entries, entry)
+					reportMu.Unlock()
+					n := completedN.Add(1)
+					fmt.Printf("[%d/%d] FAIL %s (%s): %v\n", n, totalJobs, j.inputPath, j.sz.Name, err)
+					return
+				}
+
+				sizePrompt := sizeSpecificPrompt(j.sz)
+				fullPrompt := strings.TrimSpace(ig.PromptTemplate) + "\n\n" + sizePrompt
+				ctx := context.Background()
+				inMime := mimeForExt(filepath.Ext(j.inputPath))
+				backoff := 700 * time.Millisecond
+				genBytes, genMime, err := gemini.GenerateWithRetry(ctx, gc, fullPrompt, imgBytes, inMime, j.sz.AspectRatio, ig.ImageSize, ig.Retry, backoff)
+				if err != nil {
+					entry.Status = "failed"
+					entry.Error = err.Error()
+					failedN.Add(1)
+					reportMu.Lock()
+					entries = append(entries, entry)
+					reportMu.Unlock()
+					n := completedN.Add(1)
+					fmt.Printf("[%d/%d] FAIL %s (%s) gemini: %v\n", n, totalJobs, j.inputPath, j.sz.Name, err)
+					return
+				}
+
+				if err := writeGeminiOutputPNG(rawPath, genBytes, genMime); err != nil {
+					entry.Status = "failed"
+					entry.Error = fmt.Sprintf("write raw png: %v", err)
+					failedN.Add(1)
+					reportMu.Lock()
+					entries = append(entries, entry)
+					reportMu.Unlock()
+					n := completedN.Add(1)
+					fmt.Printf("[%d/%d] FAIL %s (%s) raw write: %v\n", n, totalJobs, j.inputPath, j.sz.Name, err)
+					return
+				}
+				fmt.Printf("[RAW] %s (%s) -> %s\n", j.inputPath, j.sz.Name, rawPath)
+			} else {
+				fmt.Printf("[REUSE] %s (%s) -> %s\n", j.inputPath, j.sz.Name, rawPath)
+			}
+
+			srcImg, err := decodeImageFile(rawPath)
 			if err != nil {
 				entry.Status = "failed"
-				entry.Error = fmt.Sprintf("read input: %v", err)
+				entry.Error = fmt.Sprintf("decode raw: %v", err)
 				failedN.Add(1)
 				reportMu.Lock()
 				entries = append(entries, entry)
 				reportMu.Unlock()
 				n := completedN.Add(1)
-				fmt.Printf("[%d/%d] FAIL %s (%s): %v\n", n, totalJobs, j.inputPath, j.sz.Name, err)
+				fmt.Printf("[%d/%d] FAIL %s (%s) decode raw: %v\n", n, totalJobs, j.inputPath, j.sz.Name, err)
 				return
 			}
 
-			// HTTP client timeout applies per attempt; retries use fresh requests (see imagegen retry loop).
-			ctx := context.Background()
-			inMime := mimeForExt(filepath.Ext(j.inputPath))
-			backoff := 700 * time.Millisecond
-			genBytes, genMime, err := gemini.GenerateWithRetry(ctx, gc, fullPrompt, imgBytes, inMime, j.sz.AspectRatio, ig.ImageSize, ig.Retry, backoff)
+			outImg, err := postprocess.FixedSizeCover(srcImg, tw, th)
 			if err != nil {
 				entry.Status = "failed"
-				entry.Error = err.Error()
+				entry.Error = fmt.Sprintf("postprocess: %v", err)
 				failedN.Add(1)
 				reportMu.Lock()
 				entries = append(entries, entry)
 				reportMu.Unlock()
 				n := completedN.Add(1)
-				fmt.Printf("[%d/%d] FAIL %s (%s): %v\n", n, totalJobs, j.inputPath, j.sz.Name, err)
+				fmt.Printf("[%d/%d] FAIL %s (%s) postprocess: %v\n", n, totalJobs, j.inputPath, j.sz.Name, err)
 				return
 			}
 
-			if err := writeGeminiOutputPNG(outPath, genBytes, genMime); err != nil {
+			if err := postprocess.WritePNG(finalPath, outImg); err != nil {
 				entry.Status = "failed"
-				entry.Error = fmt.Sprintf("write png: %v", err)
+				entry.Error = fmt.Sprintf("write final png: %v", err)
 				failedN.Add(1)
 				reportMu.Lock()
 				entries = append(entries, entry)
 				reportMu.Unlock()
 				n := completedN.Add(1)
-				fmt.Printf("[%d/%d] FAIL %s (%s): %v\n", n, totalJobs, j.inputPath, j.sz.Name, err)
+				fmt.Printf("[%d/%d] FAIL %s (%s) final write: %v\n", n, totalJobs, j.inputPath, j.sz.Name, err)
 				return
 			}
 
@@ -209,7 +273,7 @@ func (a *App) BatchGemini() error {
 			entries = append(entries, entry)
 			reportMu.Unlock()
 			n := completedN.Add(1)
-			fmt.Printf("[%d/%d] OK   %s (%s) -> %s\n", n, totalJobs, j.inputPath, j.sz.Name, outPath)
+			fmt.Printf("[%d/%d] OK   %s (%s) final %dx%d -> %s\n", n, totalJobs, j.inputPath, j.sz.Name, tw, th, finalPath)
 		}()
 	}
 	wg.Wait()
@@ -231,7 +295,7 @@ func (a *App) BatchGemini() error {
 		return fmt.Errorf("write report csv: %w", err)
 	}
 
-	fmt.Printf("\n[DONE] Gemini batch finished.\n")
+	fmt.Printf("\n[DONE] Gemini batch finished (raw + fixed-size finals).\n")
 	fmt.Printf("  success=%d failed=%d skipped=%d\n", report.SuccessCount, report.FailedCount, report.SkippedCount)
 	fmt.Printf("  outputs=%s\n", ig.OutputDir)
 	fmt.Printf("  report_json=%s\n", reportJSON)
@@ -245,6 +309,15 @@ func (a *App) BatchGemini() error {
 		}
 	}
 	return nil
+}
+
+func decodeImageFile(path string) (image.Image, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	img, _, err := image.Decode(bytes.NewReader(b))
+	return img, err
 }
 
 func sizeSpecificPrompt(sz model.ImageGenSizeSpec) string {
@@ -304,9 +377,9 @@ func writeGeminiReportCSV(path string, rows []geminiReportEntry) error {
 	defer f.Close()
 	w := csv.NewWriter(f)
 	defer w.Flush()
-	_ = w.Write([]string{"input_file", "output_file", "size_name", "status", "error"})
+	_ = w.Write([]string{"input_file", "raw_output_file", "final_output_file", "size_name", "status", "error"})
 	for _, r := range rows {
-		_ = w.Write([]string{r.InputFile, r.OutputFile, r.SizeName, r.Status, r.Error})
+		_ = w.Write([]string{r.InputFile, r.RawOutputFile, r.FinalOutputFile, r.SizeName, r.Status, r.Error})
 	}
 	return w.Error()
 }

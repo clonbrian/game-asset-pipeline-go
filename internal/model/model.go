@@ -69,11 +69,13 @@ type ImageGenerationSpec struct {
 	Sizes               []ImageGenSizeSpec `json:"sizes"`
 }
 
-// ImageGenSizeSpec is one output aspect ratio for image generation (independent of resize SizeSpec).
+// ImageGenSizeSpec is one Gemini raw aspect ratio plus final pixel size (independent of top-level sizes[] for WebP pipeline).
 type ImageGenSizeSpec struct {
-	Name         string `json:"name"`
-	AspectRatio  string `json:"aspectRatio"`
-	SizePrompt   string `json:"sizePrompt,omitempty"`
+	Name          string `json:"name"`
+	AspectRatio   string `json:"aspectRatio"`
+	TargetWidth   int    `json:"targetWidth"`
+	TargetHeight  int    `json:"targetHeight"`
+	SizePrompt    string `json:"sizePrompt,omitempty"`
 }
 
 type AssetCandidate struct {

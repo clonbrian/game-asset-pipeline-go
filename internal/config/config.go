@@ -96,9 +96,9 @@ func applyImageGenerationDefaults(ig *model.ImageGenerationSpec) {
 	}
 	if len(ig.Sizes) == 0 {
 		ig.Sizes = []model.ImageGenSizeSpec{
-			{Name: "square", AspectRatio: "1:1"},
-			{Name: "wide", AspectRatio: "16:9"},
-			{Name: "tall", AspectRatio: "9:16"},
+			{Name: "square", AspectRatio: "1:1", TargetWidth: 210, TargetHeight: 210},
+			{Name: "wide", AspectRatio: "16:9", TargetWidth: 325, TargetHeight: 234},
+			{Name: "tall", AspectRatio: "9:16", TargetWidth: 294, TargetHeight: 400},
 		}
 	}
 }
