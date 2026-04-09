@@ -22,15 +22,28 @@
       "addr": "127.0.0.1:8080"
     },
     "imageGeneration": {
-      "modelPreset": "gemini_default",
+      "modelPreset": "gemini_default_realtime",
       "presets": {
-        "gemini_default": {
+        "gemini_default_realtime": {
           "providerRoute": "gemini",
+          "executionMode": "realtime",
           "model": "gemini-3.1-flash-image-preview",
           "imageSize": "512"
         },
+        "gemini_default_batch": {
+          "providerRoute": "gemini",
+          "executionMode": "batch",
+          "model": "gemini-3.1-flash-image-preview",
+          "imageSize": "512"
+        },
+        "gemini_25_batch_cheap": {
+          "providerRoute": "gemini",
+          "executionMode": "batch",
+          "model": "gemini-2.5-flash-image"
+        },
         "imagen_fast_test": {
           "providerRoute": "imagen",
+          "executionMode": "realtime",
           "model": "imagen-4.0-fast-generate-001"
         }
       },

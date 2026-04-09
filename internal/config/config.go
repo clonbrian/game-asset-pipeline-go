@@ -68,18 +68,38 @@ func applyImageGenerationDefaults(ig *model.ImageGenerationSpec) {
 		ig.Provider = "gemini"
 	}
 	if ig.ModelPreset == "" {
-		ig.ModelPreset = "gemini_default"
+		ig.ModelPreset = "gemini_default_realtime"
 	}
 	if len(ig.Presets) == 0 {
 		ig.Presets = map[string]model.ImageModelPreset{
-			"gemini_default": {
+			"gemini_default_realtime": {
 				ProviderRoute: "gemini",
+				ExecutionMode: "realtime",
 				Model:         "gemini-3.1-flash-image-preview",
 				ImageSize:     "512",
 			},
+			"gemini_default_batch": {
+				ProviderRoute: "gemini",
+				ExecutionMode: "batch",
+				Model:         "gemini-3.1-flash-image-preview",
+				ImageSize:     "512",
+			},
+			"gemini_25_batch_cheap": {
+				ProviderRoute: "gemini",
+				ExecutionMode: "batch",
+				Model:         "gemini-2.5-flash-image",
+			},
 			"imagen_fast_test": {
 				ProviderRoute: "imagen",
+				ExecutionMode: "realtime",
 				Model:         "imagen-4.0-fast-generate-001",
+			},
+			// backward compatibility
+			"gemini_default": {
+				ProviderRoute: "gemini",
+				ExecutionMode: "realtime",
+				Model:         "gemini-3.1-flash-image-preview",
+				ImageSize:     "512",
 			},
 		}
 	}

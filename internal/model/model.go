@@ -81,6 +81,7 @@ type ImageGenerationSpec struct {
 
 type ImageModelPreset struct {
 	ProviderRoute string `json:"providerRoute"`
+	ExecutionMode string `json:"executionMode,omitempty"` // realtime | batch
 	Model         string `json:"model"`
 	ImageSize     string `json:"imageSize,omitempty"`
 }

@@ -30,7 +30,10 @@ type geminiReportEntry struct {
 	RawOutputFile   string `json:"rawOutputFile"`
 	FinalOutputFile string `json:"finalOutputFile"`
 	ProviderRouteUsed string `json:"providerRouteUsed"`
+	ExecutionModeUsed string `json:"executionModeUsed"`
 	SourceImageUsed bool `json:"sourceImageUsed"`
+	BatchJobID      string `json:"batchJobId,omitempty"`
+	BatchItemID     string `json:"batchItemId,omitempty"`
 	SizeName        string `json:"sizeName"`
 	Status          string `json:"status"`
 	Error           string `json:"error,omitempty"`
@@ -42,6 +45,12 @@ type geminiBatchReport struct {
 	FailedCount  int                 `json:"failedCount"`
 	SkippedCount int                 `json:"skippedCount"`
 	Entries      []geminiReportEntry `json:"entries"`
+}
+
+type geminiJob struct {
+	inputPath string
+	baseName  string
+	sz        model.ImageGenSizeSpec
 }
 
 // BatchGemini: (1) Gemini writes raw PNGs to outputDir/raw; (2) local postprocess writes finals to outputDir/final; reports stay in outputDir.
@@ -59,7 +68,7 @@ func (a *App) BatchGemini() error {
 	}
 	preset, ok := ig.Presets[ig.ModelPreset]
 	if !ok {
-		return fmt.Errorf("imageGeneration.modelPreset %q is invalid; supported: gemini_default, imagen_fast_test", ig.ModelPreset)
+		return fmt.Errorf("imageGeneration.modelPreset %q is invalid; supported: gemini_default_realtime, gemini_default_batch, gemini_25_batch_cheap, imagen_fast_test", ig.ModelPreset)
 	}
 	providerRoute := strings.ToLower(strings.TrimSpace(preset.ProviderRoute))
 	if providerRoute != "gemini" && providerRoute != "imagen" {
@@ -70,8 +79,17 @@ func (a *App) BatchGemini() error {
 		return fmt.Errorf("imageGeneration.presets[%q].model is empty", ig.ModelPreset)
 	}
 	resolvedImageSize := strings.TrimSpace(preset.ImageSize)
-	if resolvedImageSize == "" {
+	// For some Gemini batch models (e.g. gemini-2.5-flash-image), omitting imageSize is valid.
+	// Keep fallback only for realtime or when preset explicitly sets it.
+	if resolvedImageSize == "" && strings.ToLower(strings.TrimSpace(preset.ExecutionMode)) != "batch" {
 		resolvedImageSize = ig.ImageSize
+	}
+	executionMode := strings.ToLower(strings.TrimSpace(preset.ExecutionMode))
+	if executionMode == "" {
+		executionMode = "realtime"
+	}
+	if executionMode != "realtime" && executionMode != "batch" {
+		return fmt.Errorf("imageGeneration.presets[%q].executionMode %q is invalid; use realtime or batch", ig.ModelPreset, preset.ExecutionMode)
 	}
 
 	for _, sz := range ig.Sizes {
@@ -139,18 +157,13 @@ func (a *App) BatchGemini() error {
 		httpClient = &http.Client{}
 	}
 
-	type job struct {
-		inputPath string
-		baseName  string
-		sz        model.ImageGenSizeSpec
-	}
-	var jobs []job
+	var jobs []geminiJob
 	for _, p := range imageFiles {
 		base := filepath.Base(p)
 		ext := filepath.Ext(base)
 		nameNoExt := strings.TrimSuffix(base, ext)
 		for _, sz := range ig.Sizes {
-			jobs = append(jobs, job{inputPath: p, baseName: nameNoExt, sz: sz})
+			jobs = append(jobs, geminiJob{inputPath: p, baseName: nameNoExt, sz: sz})
 		}
 	}
 
@@ -164,11 +177,15 @@ func (a *App) BatchGemini() error {
 		mode = "raw-only"
 	}
 	fmt.Printf("[INFO] batch-gemini mode = %s\n", mode)
+	fmt.Printf("[INFO] executionMode = %s\n", executionMode)
 	fmt.Printf("[INFO] Gemini batch (raw PNG + local postprocess=%v → final %s): %d sources × %d sizes = %d jobs (concurrency=%d keepRaw=%v)\n",
 		postprocessEnabled, ff, len(imageFiles), len(ig.Sizes), len(jobs), ig.Concurrency, persistRaw)
 	fmt.Printf("[INFO] preset=%s route=%s model=%s output=%s (raw=%s final=%s)\n", ig.ModelPreset, providerRoute, resolvedModel, ig.OutputDir, rawDir, finalDir)
 	if providerRoute == "imagen" {
 		fmt.Printf("[WARN] imagen_fast_test currently runs as text-to-image and does not use the source image as reference input\n")
+	}
+	if providerRoute == "gemini" && executionMode == "batch" {
+		return a.runGeminiBatchMode(ig, jobs, rawDir, finalDir, ff, postprocessEnabled, persistRaw, providerRoute, executionMode, resolvedModel, resolvedImageSize, httpClient, apiKey)
 	}
 
 	gc := &gemini.Client{
@@ -213,6 +230,7 @@ func (a *App) BatchGemini() error {
 				RawOutputFile:   rawPath,
 				FinalOutputFile: finalPath,
 				ProviderRouteUsed: providerRoute,
+				ExecutionModeUsed: executionMode,
 				SourceImageUsed: providerRoute == "gemini",
 				SizeName:        j.sz.Name,
 			}
@@ -466,13 +484,13 @@ func writeGeminiReportCSV(path string, rows []geminiReportEntry) error {
 	defer f.Close()
 	w := csv.NewWriter(f)
 	defer w.Flush()
-	_ = w.Write([]string{"input_file", "raw_output_file", "final_output_file", "provider_route_used", "source_image_used", "size_name", "status", "error"})
+	_ = w.Write([]string{"input_file", "raw_output_file", "final_output_file", "provider_route_used", "execution_mode_used", "source_image_used", "batch_job_id", "batch_item_id", "size_name", "status", "error"})
 	for _, r := range rows {
 		sourceUsed := "false"
 		if r.SourceImageUsed {
 			sourceUsed = "true"
 		}
-		_ = w.Write([]string{r.InputFile, r.RawOutputFile, r.FinalOutputFile, r.ProviderRouteUsed, sourceUsed, r.SizeName, r.Status, r.Error})
+		_ = w.Write([]string{r.InputFile, r.RawOutputFile, r.FinalOutputFile, r.ProviderRouteUsed, r.ExecutionModeUsed, sourceUsed, r.BatchJobID, r.BatchItemID, r.SizeName, r.Status, r.Error})
 	}
 	return w.Error()
 }
