@@ -84,6 +84,11 @@ func applyImageGenerationDefaults(ig *model.ImageGenerationSpec) {
 				Model:         "gemini-3.1-flash-image-preview",
 				ImageSize:     "512",
 			},
+			"gemini_25_realtime_cheap": {
+				ProviderRoute: "gemini",
+				ExecutionMode: "realtime",
+				Model:         "gemini-2.5-flash-image",
+			},
 			"gemini_25_batch_cheap": {
 				ProviderRoute: "gemini",
 				ExecutionMode: "batch",

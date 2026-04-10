@@ -36,6 +36,11 @@
           "model": "gemini-3.1-flash-image-preview",
           "imageSize": "512"
         },
+        "gemini_25_realtime_cheap": {
+          "providerRoute": "gemini",
+          "executionMode": "realtime",
+          "model": "gemini-2.5-flash-image"
+        },
         "gemini_25_batch_cheap": {
           "providerRoute": "gemini",
           "executionMode": "batch",

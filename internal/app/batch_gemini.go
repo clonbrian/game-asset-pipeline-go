@@ -40,11 +40,12 @@ type geminiReportEntry struct {
 }
 
 type geminiBatchReport struct {
-	RunAt        string              `json:"runAt"`
-	SuccessCount int                 `json:"successCount"`
-	FailedCount  int                 `json:"failedCount"`
-	SkippedCount int                 `json:"skippedCount"`
-	Entries      []geminiReportEntry `json:"entries"`
+	RunAt               string              `json:"runAt"`
+	SuccessCount        int                 `json:"successCount"`
+	FailedCount         int                 `json:"failedCount"`
+	SkippedCount        int                 `json:"skippedCount"`
+	PendingRemoteCount  int                 `json:"pendingRemoteCount,omitempty"`
+	Entries             []geminiReportEntry `json:"entries"`
 }
 
 type geminiJob struct {
@@ -68,7 +69,7 @@ func (a *App) BatchGemini() error {
 	}
 	preset, ok := ig.Presets[ig.ModelPreset]
 	if !ok {
-		return fmt.Errorf("imageGeneration.modelPreset %q is invalid; supported: gemini_default_realtime, gemini_default_batch, gemini_25_batch_cheap, imagen_fast_test", ig.ModelPreset)
+		return fmt.Errorf("imageGeneration.modelPreset %q is invalid; supported: gemini_default_realtime, gemini_default_batch, gemini_25_realtime_cheap, gemini_25_batch_cheap, imagen_fast_test", ig.ModelPreset)
 	}
 	providerRoute := strings.ToLower(strings.TrimSpace(preset.ProviderRoute))
 	if providerRoute != "gemini" && providerRoute != "imagen" {
@@ -79,9 +80,9 @@ func (a *App) BatchGemini() error {
 		return fmt.Errorf("imageGeneration.presets[%q].model is empty", ig.ModelPreset)
 	}
 	resolvedImageSize := strings.TrimSpace(preset.ImageSize)
-	// For some Gemini batch models (e.g. gemini-2.5-flash-image), omitting imageSize is valid.
-	// Keep fallback only for realtime or when preset explicitly sets it.
-	if resolvedImageSize == "" && strings.ToLower(strings.TrimSpace(preset.ExecutionMode)) != "batch" {
+	// For some models (e.g. gemini-2.5-flash-image), omitting imageSize is valid.
+	// Fallback to global imageSize only when preset omitted it and model expects it.
+	if resolvedImageSize == "" && shouldFallbackImageSize(resolvedModel) {
 		resolvedImageSize = ig.ImageSize
 	}
 	executionMode := strings.ToLower(strings.TrimSpace(preset.ExecutionMode))
@@ -109,6 +110,12 @@ func (a *App) BatchGemini() error {
 	apiKey := strings.TrimSpace(os.Getenv(ig.APIKeyEnv))
 	if apiKey == "" {
 		return fmt.Errorf("environment variable %s is empty (set your Gemini API key)", ig.APIKeyEnv)
+	}
+
+	if ig.AutoSyncPendingBatches != nil && *ig.AutoSyncPendingBatches {
+		if err := a.SyncBatchPending(true); err != nil {
+			fmt.Printf("[WARN] autoSyncPendingBatches: %v\n", err)
+		}
 	}
 
 	extOK := map[string]struct{}{}
@@ -493,4 +500,13 @@ func writeGeminiReportCSV(path string, rows []geminiReportEntry) error {
 		_ = w.Write([]string{r.InputFile, r.RawOutputFile, r.FinalOutputFile, r.ProviderRouteUsed, r.ExecutionModeUsed, sourceUsed, r.BatchJobID, r.BatchItemID, r.SizeName, r.Status, r.Error})
 	}
 	return w.Error()
+}
+
+func shouldFallbackImageSize(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	// gemini-2.5-flash-image works without imageSize in current API usage.
+	if strings.Contains(m, "gemini-2.5-flash-image") {
+		return false
+	}
+	return true
 }

@@ -38,9 +38,9 @@ type batchCreateReq struct {
 	Batch batchBody `json:"batch"`
 }
 type batchBody struct {
-	DisplayName string      `json:"displayName,omitempty"`
-	Model       string      `json:"model"`
-	InputConfig batchInput  `json:"inputConfig"`
+	DisplayName string     `json:"displayName,omitempty"`
+	Model       string     `json:"model"`
+	InputConfig batchInput `json:"inputConfig"`
 }
 type batchInput struct {
 	Requests inlinedRequests `json:"requests"`
@@ -53,26 +53,44 @@ type inlinedRequest struct {
 	Metadata map[string]any    `json:"metadata,omitempty"`
 }
 
+// batchInlineRow is one element in output.inlinedResponses.{responses|inlinedResponses}.
+type batchInlineRow struct {
+	Response struct {
+		Candidates []struct {
+			Content struct {
+				Parts []responsePart `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
+	} `json:"response"`
+	Metadata map[string]any `json:"metadata"`
+	Error    struct {
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+// API may use output.inlinedResponses.responses OR nested output.inlinedResponses.inlinedResponses.
+type inlinedResponsesBlock struct {
+	Responses           []batchInlineRow `json:"responses"`
+	InlinedResponsesDup []batchInlineRow `json:"inlinedResponses"`
+}
+
 type batchGetResp struct {
 	Name   string `json:"name"`
 	State  string `json:"state"`
 	Output struct {
-		InlinedResponses struct {
-			Responses []struct {
-				Response struct {
-					Candidates []struct {
-						Content struct {
-							Parts []responsePart `json:"parts"`
-						} `json:"content"`
-					} `json:"candidates"`
-				} `json:"response"`
-				Metadata map[string]any `json:"metadata"`
-				Error    struct {
-					Message string `json:"message"`
-				} `json:"error"`
-			} `json:"responses"`
-		} `json:"inlinedResponses"`
+		InlinedResponses inlinedResponsesBlock `json:"inlinedResponses"`
 	} `json:"output"`
+}
+
+func inlineResponseRows(b inlinedResponsesBlock) []batchInlineRow {
+	if len(b.InlinedResponsesDup) > 0 {
+		return b.InlinedResponsesDup
+	}
+	return b.Responses
+}
+
+func countInlineRows(parsed *batchGetResp) int {
+	return len(inlineResponseRows(parsed.Output.InlinedResponses))
 }
 
 func (c *Client) CreateBatch(ctx context.Context, displayName string, items []BatchRequestItem) (string, error) {
@@ -159,13 +177,19 @@ func (c *Client) GetBatch(ctx context.Context, name string) (*BatchJob, []BatchO
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, nil, fmt.Errorf("gemini batch get: %s", summarizeAPIError(body, resp.StatusCode))
 	}
+	payload := pickBatchPayloadForParse(body)
 	var parsed batchGetResp
-	if err := json.Unmarshal(body, &parsed); err != nil {
+	if err := json.Unmarshal(payload, &parsed); err != nil {
 		return nil, nil, err
 	}
-	job := &BatchJob{Name: parsed.Name, State: parsed.State}
+	var metaParsed batchGetResp
+	_ = json.Unmarshal(extractBatchResourceJSON(body), &metaParsed)
+	job := &BatchJob{
+		Name:  strings.TrimSpace(coalesceNonEmpty(parsed.Name, metaParsed.Name)),
+		State: strings.TrimSpace(coalesceNonEmpty(parsed.State, metaParsed.State)),
+	}
 	var outs []BatchOutputItem
-	for _, r := range parsed.Output.InlinedResponses.Responses {
+	for _, r := range inlineResponseRows(parsed.Output.InlinedResponses) {
 		out := BatchOutputItem{
 			Metadata: r.Metadata,
 			Error:    r.Error.Message,
@@ -189,6 +213,77 @@ func (c *Client) GetBatch(ctx context.Context, name string) (*BatchJob, []BatchO
 		outs = append(outs, out)
 	}
 	return job, outs, nil
+}
+
+func coalesceNonEmpty(a, b string) string {
+	if strings.TrimSpace(a) != "" {
+		return a
+	}
+	return b
+}
+
+// pickBatchPayloadForParse chooses JSON to unmarshal as batchGetResp.
+// For completed LRO jobs, the final GenerateContentBatch-shaped payload is often in top-level "response"
+// while "metadata" may lag or differ; prefer "response" when it contains inlined output rows.
+func pickBatchPayloadForParse(body []byte) []byte {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(body, &root); err != nil {
+		return extractBatchResourceJSON(body)
+	}
+	if resp, ok := root["response"]; ok && len(resp) > 0 && string(resp) != "null" {
+		var probe batchGetResp
+		if json.Unmarshal(resp, &probe) == nil && countInlineRows(&probe) > 0 {
+			return resp
+		}
+	}
+	return extractBatchResourceJSON(body)
+}
+
+// extractBatchResourceJSON returns the JSON object that carries GenerateContentBatch fields.
+// batches.get returns a long-running Operation: batch state/output usually live under "metadata",
+// not at the top level — unmarshaling the raw body would leave "state" empty.
+func extractBatchResourceJSON(body []byte) []byte {
+	var root map[string]interface{}
+	if err := json.Unmarshal(body, &root); err != nil {
+		return body
+	}
+	if _, isLRO := root["done"]; !isLRO {
+		return body
+	}
+	md, ok := root["metadata"].(map[string]interface{})
+	if !ok || len(md) == 0 {
+		return body
+	}
+	// Batch resource fields are embedded in metadata (with optional @type).
+	hasBatchish := false
+	for k := range md {
+		if k == "@type" {
+			continue
+		}
+		hasBatchish = true
+		break
+	}
+	if !hasBatchish {
+		return body
+	}
+	if _, ok := md["state"]; ok {
+		out, err := json.Marshal(md)
+		if err == nil {
+			return out
+		}
+	}
+	if _, ok := md["output"]; ok {
+		out, err := json.Marshal(md)
+		if err == nil {
+			return out
+		}
+	}
+	// Metadata is the LRO payload for this batch even if state is under another key later.
+	out, err := json.Marshal(md)
+	if err == nil {
+		return out
+	}
+	return body
 }
 
 func (c *Client) WaitBatch(ctx context.Context, name string, interval time.Duration) (*BatchJob, []BatchOutputItem, error) {

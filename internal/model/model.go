@@ -77,6 +77,8 @@ type ImageGenerationSpec struct {
 	// FinalFormat: output format for postprocessed files under finalDir; only "webp" is implemented.
 	FinalFormat         string             `json:"finalFormat,omitempty"`
 	Sizes               []ImageGenSizeSpec `json:"sizes"`
+	// AutoSyncPendingBatches: when true, batch-gemini runs a single non-blocking sync of pending_batch_jobs.json before work.
+	AutoSyncPendingBatches *bool `json:"autoSyncPendingBatches,omitempty"`
 }
 
 type ImageModelPreset struct {
