@@ -49,9 +49,10 @@ type geminiBatchReport struct {
 }
 
 type geminiJob struct {
-	inputPath string
-	baseName  string
-	sz        model.ImageGenSizeSpec
+	inputPath  string
+	baseName   string // original stem (for batch item_id uniqueness)
+	outputStem string // normalized stem + size suffix; used for raw/final filenames
+	sz         model.ImageGenSizeSpec
 }
 
 // BatchGemini: (1) Gemini writes raw PNGs to outputDir/raw; (2) local postprocess writes finals to outputDir/final; reports stay in outputDir.
@@ -170,7 +171,12 @@ func (a *App) BatchGemini() error {
 		ext := filepath.Ext(base)
 		nameNoExt := strings.TrimSuffix(base, ext)
 		for _, sz := range ig.Sizes {
-			jobs = append(jobs, geminiJob{inputPath: p, baseName: nameNoExt, sz: sz})
+			jobs = append(jobs, geminiJob{
+				inputPath:  p,
+				baseName:   nameNoExt,
+				outputStem: geminiJobOutputStem(nameNoExt, sz.Name),
+				sz:         sz,
+			})
 		}
 	}
 
@@ -226,8 +232,8 @@ func (a *App) BatchGemini() error {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			rawName := fmt.Sprintf("%s__%s__raw.png", j.baseName, j.sz.Name)
-			finalName := fmt.Sprintf("%s__%s.%s", j.baseName, j.sz.Name, ff)
+			rawName := j.outputStem + ".png"
+			finalName := j.outputStem + "." + ff
 			rawPath := filepath.Join(rawDir, rawName)
 			finalPath := filepath.Join(finalDir, finalName)
 			tw, th := j.sz.TargetWidth, j.sz.TargetHeight

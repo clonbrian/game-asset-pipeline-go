@@ -57,8 +57,8 @@ func (a *App) runGeminiBatchMode(
 	var batchItems []gemini.BatchRequestItem
 	jobByItem := map[string]geminiJob{}
 	for i, j := range jobs {
-		rawPath := filepath.Join(rawDir, fmt.Sprintf("%s__%s__raw.png", j.baseName, j.sz.Name))
-		finalPath := filepath.Join(finalDir, fmt.Sprintf("%s__%s.%s", j.baseName, j.sz.Name, ff))
+		rawPath := filepath.Join(rawDir, j.outputStem+".png")
+		finalPath := filepath.Join(finalDir, j.outputStem+"."+ff)
 		entry := geminiReportEntry{
 			InputFile:         j.inputPath,
 			RawOutputFile:     rawPath,
@@ -110,7 +110,7 @@ func (a *App) runGeminiBatchMode(
 		}
 		itemID := fmt.Sprintf("item_%d_%s_%s", i, j.baseName, j.sz.Name)
 		entry.BatchItemID = itemID
-		meta := map[string]any{"item_id": itemID}
+		meta := map[string]any{"item_id": itemID, "output_stem": j.outputStem}
 		batchItems = append(batchItems, gemini.BatchRequestItem{
 			Prompt:      composeGeminiUserPrompt(ig, j.sz),
 			SourceBytes: imgBytes,

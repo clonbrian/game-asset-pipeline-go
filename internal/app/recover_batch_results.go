@@ -127,11 +127,22 @@ func sanitizeRecoveryJobDir(canonicalJobID string) string {
 	return s
 }
 
+// recoveryBaseName uses the same stem as raw/final: metadata output_stem when present,
+// else derives stem from item_id via stemFromBatchItemID (never uses raw item_id as the filename).
 func recoveryBaseName(meta map[string]any, index int) string {
 	if meta != nil {
+		if v, ok := meta["output_stem"].(string); ok {
+			if s := strings.TrimSpace(v); s != "" {
+				if s2 := sanitizeRecoveryFileName(s); s2 != "" {
+					return s2
+				}
+			}
+		}
 		if v, ok := meta["item_id"].(string); ok {
-			if s := sanitizeRecoveryFileName(v); s != "" {
-				return s
+			if stem, ok := stemFromBatchItemID(v); ok {
+				if s2 := sanitizeRecoveryFileName(stem); s2 != "" {
+					return s2
+				}
 			}
 		}
 	}
