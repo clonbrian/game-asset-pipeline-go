@@ -49,10 +49,11 @@ type geminiBatchReport struct {
 }
 
 type geminiJob struct {
-	inputPath  string
-	baseName   string // original stem (for batch item_id uniqueness)
-	outputStem string // normalized stem + size suffix; used for raw/final filenames
-	sz         model.ImageGenSizeSpec
+	inputPath     string
+	baseName      string // original stem (for batch item_id uniqueness)
+	outputStem    string // normalized stem + size suffix; used for raw/final filenames
+	relFromInput  string // path of input file relative to imageGeneration.inputDir (OS separators)
+	sz            model.ImageGenSizeSpec
 }
 
 // BatchGemini: (1) Gemini writes raw PNGs to outputDir/raw; (2) local postprocess writes finals to outputDir/final; reports stay in outputDir.
@@ -148,6 +149,11 @@ func (a *App) BatchGemini() error {
 		return nil
 	}
 
+	inputRootAbs, err := filepath.Abs(ig.InputDir)
+	if err != nil {
+		return fmt.Errorf("inputDir abs: %w", err)
+	}
+
 	rawDir := filepath.Join(ig.OutputDir, "raw")
 	finalDir := filepath.Join(ig.OutputDir, "final")
 	for _, d := range []string{ig.OutputDir, rawDir, finalDir} {
@@ -167,15 +173,24 @@ func (a *App) BatchGemini() error {
 
 	var jobs []geminiJob
 	for _, p := range imageFiles {
+		pAbs, err := filepath.Abs(p)
+		if err != nil {
+			return fmt.Errorf("input file abs %s: %w", p, err)
+		}
+		relFromInput, err := inputFileRelPath(inputRootAbs, pAbs)
+		if err != nil {
+			return fmt.Errorf("input rel path %s: %w", p, err)
+		}
 		base := filepath.Base(p)
 		ext := filepath.Ext(base)
 		nameNoExt := strings.TrimSuffix(base, ext)
 		for _, sz := range ig.Sizes {
 			jobs = append(jobs, geminiJob{
-				inputPath:  p,
-				baseName:   nameNoExt,
-				outputStem: geminiJobOutputStem(nameNoExt, sz.Name),
-				sz:         sz,
+				inputPath:    p,
+				baseName:     nameNoExt,
+				outputStem:   geminiJobOutputStem(nameNoExt, sz.Name),
+				relFromInput: relFromInput,
+				sz:           sz,
 			})
 		}
 	}
@@ -234,8 +249,8 @@ func (a *App) BatchGemini() error {
 
 			rawName := j.outputStem + ".png"
 			finalName := j.outputStem + "." + ff
-			rawPath := filepath.Join(rawDir, rawName)
-			finalPath := filepath.Join(finalDir, finalName)
+			rawPath := joinOutputPreservingInputSubdirs(rawDir, j.relFromInput, rawName)
+			finalPath := joinOutputPreservingInputSubdirs(finalDir, j.relFromInput, finalName)
 			tw, th := j.sz.TargetWidth, j.sz.TargetHeight
 
 			entry := geminiReportEntry{

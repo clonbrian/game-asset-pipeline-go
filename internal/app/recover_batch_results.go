@@ -98,7 +98,16 @@ func (a *App) recoverBatchResultsWithBaseDir(jobID string, baseOutputDir string)
 
 		base := recoveryBaseName(it.Metadata, i)
 		ext := extForImageMime(it.MimeType)
-		path := uniqueRecoveryPath(outDir, base, ext, nameSeq)
+		fileDir := outDir
+		if sub := recoverySubdirFromSourceRelPath(it.Metadata); sub != "" {
+			fileDir = filepath.Join(outDir, sub)
+		}
+		if err := os.MkdirAll(fileDir, 0o755); err != nil {
+			errCount++
+			fmt.Printf("[ERROR] item %d: mkdir %s: %v\n", i, fileDir, err)
+			continue
+		}
+		path := uniqueRecoveryPath(fileDir, base, ext, nameSeq)
 		if err := os.WriteFile(path, it.Image, 0o644); err != nil {
 			errCount++
 			fmt.Printf("[ERROR] item %d: write %s: %v\n", i, path, err)

@@ -11,18 +11,38 @@ import (
 	"game-asset-pipeline-go/internal/model"
 )
 
+// PostprocessGeminiOutputOpts configures postprocess-gemini-output / postprocess-current-mode.
+type PostprocessGeminiOutputOpts struct {
+	Source             string
+	Dest               string
+	Recursive          bool
+	StripFirstRelPart  bool // drop first path segment of rel (e.g. recovered job folder) before writing under dest
+}
+
 // PostprocessGeminiOutput rescans local images under source, applies the same FixedSizeCover + WriteFinal
 // pipeline as batch-gemini with postprocessEnabled=true, and writes only under dest (never modifies source).
 // Does not call Gemini; GEMINI_API_KEY is not required.
 func (a *App) PostprocessGeminiOutput(source, dest string, recursive bool) error {
-	source = strings.TrimSpace(source)
-	dest = strings.TrimSpace(dest)
+	return a.PostprocessGeminiOutputOpts(PostprocessGeminiOutputOpts{
+		Source:            source,
+		Dest:              dest,
+		Recursive:         recursive,
+		StripFirstRelPart: false,
+	})
+}
+
+// PostprocessGeminiOutputOpts is the full implementation; StripFirstRelPart supports batch recovered → final without job id in output tree.
+func (a *App) PostprocessGeminiOutputOpts(opts PostprocessGeminiOutputOpts) error {
+	source := strings.TrimSpace(opts.Source)
+	dest := strings.TrimSpace(opts.Dest)
 	if source == "" {
 		return fmt.Errorf("-source is required")
 	}
 	if dest == "" {
 		return fmt.Errorf("-dest is required")
 	}
+	recursive := opts.Recursive
+	stripFirst := opts.StripFirstRelPart
 
 	ig := a.Cfg.ImageGeneration
 	if ig == nil {
@@ -86,6 +106,9 @@ func (a *App) PostprocessGeminiOutput(source, dest string, recursive bool) error
 		rel, err := filepath.Rel(srcAbs, path)
 		if err != nil {
 			return err
+		}
+		if stripFirst {
+			rel = stripFirstPathSegment(rel)
 		}
 		base := strings.TrimSuffix(filepath.Base(rel), ext)
 		sz, err := sizeSpecForOutputStem(base, ig.Sizes)
@@ -168,21 +191,27 @@ func (a *App) PostprocessCurrentMode() error {
 	if out == "" {
 		return fmt.Errorf("imageGeneration.outputDir is empty")
 	}
-	var source, dest string
-	var recursive bool
+	dest := filepath.Join(out, "final")
+	var source string
+	var recursive, stripFirst bool
 	switch em {
 	case "batch":
 		source = filepath.Join(out, "recovered")
-		dest = filepath.Join(out, "recovered_webp")
 		recursive = true
+		stripFirst = true
 	default:
 		source = filepath.Join(out, "raw")
-		dest = filepath.Join(out, "final")
-		recursive = false
+		recursive = true
+		stripFirst = false
 	}
 	fmt.Printf("[INFO] postprocess-current-mode: preset=%s executionMode=%s\n", ig.ModelPreset, em)
-	fmt.Printf("[INFO] source=%s dest=%s recursive=%v\n", source, dest, recursive)
-	return a.PostprocessGeminiOutput(source, dest, recursive)
+	fmt.Printf("[INFO] source=%s dest=%s recursive=%v stripFirstRelPart=%v\n", source, dest, recursive, stripFirst)
+	return a.PostprocessGeminiOutputOpts(PostprocessGeminiOutputOpts{
+		Source:            source,
+		Dest:              dest,
+		Recursive:         recursive,
+		StripFirstRelPart: stripFirst,
+	})
 }
 
 // sizeSpecForOutputStem maps filename stem to config imageGeneration.sizes using the same rules as
